@@ -12,6 +12,12 @@ struct CALAPPApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .background(.ultraThinMaterial)
+                .preferredColorScheme(.dark)
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified(showsTitle: false))
+        .defaultSize(width: 1200, height: 800)
+        .windowResizability(.contentSize)
     }
 }
