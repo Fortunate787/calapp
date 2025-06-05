@@ -1,0 +1,38 @@
+{
+  "" : {
+    "diagnostics" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPP-master.dia",
+    "emit-module-dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPP-master-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPP-master-emit-module.dia",
+    "swift-dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPP-master.swiftdeps"
+  },
+  "/Volumes/Fortunate/CALAPP/CALAPP/CALAPPApp.swift" : {
+    "const-values" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.swiftconstvalues",
+    "dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.d",
+    "diagnostics" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.dia",
+    "index-unit-output-path" : "/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.o",
+    "llvm-bc" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.bc",
+    "object" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.o",
+    "swift-dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp.swiftdeps",
+    "swiftmodule" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/CALAPPApp~partial.swiftmodule"
+  },
+  "/Volumes/Fortunate/CALAPP/CALAPP/ContentView.swift" : {
+    "const-values" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.swiftconstvalues",
+    "dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.d",
+    "diagnostics" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.dia",
+    "index-unit-output-path" : "/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.o",
+    "llvm-bc" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.bc",
+    "object" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.o",
+    "swift-dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView.swiftdeps",
+    "swiftmodule" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/ContentView~partial.swiftmodule"
+  },
+  "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "const-values" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftconstvalues",
+    "dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.d",
+    "diagnostics" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.dia",
+    "index-unit-output-path" : "/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "swift-dependencies" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftdeps",
+    "swiftmodule" : "/Volumes/Fortunate/CALAPP/build/Build/Intermediates.noindex/CALAPP.build/Debug/CALAPP.build/Objects-normal/arm64/GeneratedAssetSymbols~partial.swiftmodule"
+  }
+}

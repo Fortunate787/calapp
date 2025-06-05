@@ -1,0 +1,40 @@
+{
+  "source": "/Volumes/Fortunate/CALAPP/CALAPP/ContentView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Chats",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 81
+        }
+      },
+      {
+        "comment": "",
+        "key": "Welcome to %@",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 141
+        }
+      },
+      {
+        "comment": "",
+        "key": "Start a conversation with the AI",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 144
+        }
+      },
+      {
+        "comment": "",
+        "key": "Message",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 204
+        }
+      }
+    ]
+  },
+  "version": 1
+}
