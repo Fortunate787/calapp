@@ -19,26 +19,93 @@ struct Message: Identifiable, Codable {
     }
 }
 
+// Node System for Conversation Tree
+struct ConversationNode: Identifiable, Codable {
+    var id: UUID
+    var label: String           // The question or message text
+    var routeLabel: String?     // What choice led here (e.g. 'Route A')
+    var parentId: UUID?         // The previous node
+    var timestamp: Date         // When this question was shown
+    var isCurrentUser: Bool
+    var children: [UUID]        // Child node IDs
+    var aiResponses: [AIResponse] // Multiple AI responses for this node
+    var selectedResponseId: UUID? // Currently selected AI response
+    
+    init(id: UUID = UUID(), label: String, routeLabel: String? = nil, parentId: UUID? = nil, 
+         timestamp: Date = Date(), isCurrentUser: Bool, children: [UUID] = [], 
+         aiResponses: [AIResponse] = [], selectedResponseId: UUID? = nil) {
+        self.id = id
+        self.label = label
+        self.routeLabel = routeLabel
+        self.parentId = parentId
+        self.timestamp = timestamp
+        self.isCurrentUser = isCurrentUser
+        self.children = children
+        self.aiResponses = aiResponses
+        self.selectedResponseId = selectedResponseId
+    }
+}
+
+struct AIResponse: Identifiable, Codable {
+    var id: UUID
+    var text: String
+    var timestamp: Date
+    
+    init(id: UUID = UUID(), text: String, timestamp: Date = Date()) {
+        self.id = id
+        self.text = text
+        self.timestamp = timestamp
+    }
+}
+
 struct Conversation: Identifiable, Codable {
     var id: UUID
     var name: String
-    var messages: [MessageTree]
+    var nodes: [UUID: ConversationNode] // Dictionary of all nodes
+    var rootNodeId: UUID?               // Starting node
+    var currentNodeId: UUID?            // Currently selected node
     let createdAt: Date
-    init(id: UUID = UUID(), name: String, messages: [MessageTree] = [], createdAt: Date = Date()) {
+    
+    init(id: UUID = UUID(), name: String, nodes: [UUID: ConversationNode] = [:], 
+         rootNodeId: UUID? = nil, currentNodeId: UUID? = nil, createdAt: Date = Date()) {
         self.id = id
         self.name = name
-        self.messages = messages
+        self.nodes = nodes
+        self.rootNodeId = rootNodeId
+        self.currentNodeId = currentNodeId
         self.createdAt = createdAt
     }
+    
     var lastMessagePreview: String {
-        guard let lastMessage = messages.last?.allMessages.last else { return "No messages" }
-        return lastMessage.text.prefix(50) + (lastMessage.text.count > 50 ? "..." : "")
+        guard let currentNodeId = currentNodeId,
+              let currentNode = nodes[currentNodeId] else { return "No messages" }
+        return currentNode.label.prefix(50) + (currentNode.label.count > 50 ? "..." : "")
     }
+    
     var formattedDate: String {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter.string(from: createdAt)
+    }
+    
+    // Get path from root to current node
+    func getPathToNode(_ nodeId: UUID) -> [ConversationNode] {
+        var path: [ConversationNode] = []
+        var currentId: UUID? = nodeId
+        
+        while let id = currentId, let node = nodes[id] {
+            path.insert(node, at: 0)
+            currentId = node.parentId
+        }
+        
+        return path
+    }
+    
+    // Get current conversation path
+    func getCurrentPath() -> [ConversationNode] {
+        guard let currentNodeId = currentNodeId else { return [] }
+        return getPathToNode(currentNodeId)
     }
 }
 
@@ -51,6 +118,7 @@ struct AISettings: Codable {
     var frequencyPenalty: Double
     var presencePenalty: Double
     var model: String
+    
     static let `default` = AISettings(
         systemPrompt: "You are a helpful, intelligent, and creative AI assistant.",
         temperature: 0.8,
@@ -63,77 +131,13 @@ struct AISettings: Codable {
     )
 }
 
-// --- MessageTree for branching edits ---
-struct MessageBranch: Identifiable, Codable {
-    var id: UUID
-    var parentMessageId: UUID
-    var aiMessage: Message
-    var timestamp: Date
-    
-    init(id: UUID = UUID(), parentMessageId: UUID, aiMessage: Message, timestamp: Date = Date()) {
-        self.id = id
-        self.parentMessageId = parentMessageId
-        self.aiMessage = aiMessage
-        self.timestamp = timestamp
-    }
-}
-
-struct MessageTree: Identifiable, Codable {
-    var id: UUID
-    var text: String
-    var isCurrentUser: Bool
-    var timestamp: Date
-    var branches: [MessageBranch]
-    var selectedBranchId: UUID?
-    var parentTreeId: UUID?
-    var childTreeIds: [UUID]
-    
-    init(id: UUID = UUID(), text: String, isCurrentUser: Bool, timestamp: Date = Date(), branches: [MessageBranch] = [], selectedBranchId: UUID? = nil, parentTreeId: UUID? = nil, childTreeIds: [UUID] = []) {
-        self.id = id
-        self.text = text
-        self.isCurrentUser = isCurrentUser
-        self.timestamp = timestamp
-        self.branches = branches
-        self.selectedBranchId = selectedBranchId
-        self.parentTreeId = parentTreeId
-        self.childTreeIds = childTreeIds
-    }
-    
-    var currentBranch: MessageBranch? {
-        guard let selectedId = selectedBranchId else { return nil }
-        return branches.first { $0.id == selectedId }
-    }
-    
-    var allMessages: [Message] {
-        var messages = [Message(id: id, text: text, isCurrentUser: isCurrentUser, timestamp: timestamp)]
-        if let branch = currentBranch {
-            messages.append(branch.aiMessage)
-        }
-        return messages
-    }
-}
-
-struct MessageVersion: Identifiable, Codable {
-    var id: UUID
-    var text: String
-    var timestamp: Date
-    var editedAt: Date
-    init(id: UUID = UUID(), text: String, timestamp: Date = Date(), editedAt: Date = Date()) {
-        self.id = id
-        self.text = text
-        self.timestamp = timestamp
-        self.editedAt = editedAt
-    }
-}
-
 // --- ViewModel ---
 class ChatViewModel: ObservableObject {
     @Published var conversations: [UUID: Conversation] = [:]
-    @Published var conversationNames: [UUID: String] = [:]
     @Published var aiSettings: AISettings = .default
     @Published var selectedConversationId: UUID?
     @Published var editingConversationNameId: UUID?
-    @Published var editingMessageId: UUID?
+    @Published var editingNodeId: UUID?
     @Published var isTyping: Bool = false
 
     var selectedConversation: Conversation? {
@@ -149,220 +153,151 @@ class ChatViewModel: ObservableObject {
 
     func createNewConversation(name: String, autoRename: Bool = true) {
         let newConversation = Conversation(name: name)
-        conversations.insert(newConversation, forKey: newConversation.id)
+        conversations[newConversation.id] = newConversation
         selectedConversationId = newConversation.id
         if autoRename {
             editingConversationNameId = newConversation.id
         }
     }
+    
     func deleteConversation(id: UUID) {
         conversations.removeValue(forKey: id)
         if selectedConversationId == id {
             selectedConversationId = conversations.first?.key
         }
     }
+    
     func renameConversation(id: UUID, newName: String) {
-        if let conversation = conversations[id] {
-            conversation.name = newName
-            conversations.insert(conversation, forKey: id)
-        }
+        conversations[id]?.name = newName
         editingConversationNameId = nil
     }
-    func addMessage(_ message: Message, to conversationId: UUID) {
-        let newTree = MessageTree(text: message.text, isCurrentUser: message.isCurrentUser)
-        if var conversation = conversations[conversationId] {
-            if let lastTree = conversation.last {
-                newTree.parentTreeId = lastTree.id
-                conversation[conversation.count - 1].childTreeIds.append(newTree.id)
-            }
-            conversation.append(newTree)
-            conversations.insert(conversation, forKey: conversationId)
-            updateConversationName(conversationId)
+    
+    func addMessage(_ message: String, to conversationId: UUID, isUser: Bool) {
+        guard var conversation = conversations[conversationId] else { return }
+        
+        let newNode = ConversationNode(
+            label: message,
+            parentId: conversation.currentNodeId,
+            isCurrentUser: isUser
+        )
+        
+        // Add to parent's children if exists
+        if let parentId = conversation.currentNodeId {
+            conversation.nodes[parentId]?.children.append(newNode.id)
         } else {
-            conversations.insert(conversation, forKey: conversationId)
+            // This is the root node
+            conversation.rootNodeId = newNode.id
         }
-    }
-    func getMessages(for conversationId: UUID) -> [MessageTree] {
-        return conversations[conversationId] ?? []
-    }
-    func getConversationName(for conversationId: UUID) -> String {
-        return conversationNames[conversationId] ?? "Unknown"
-    }
-    func editMessage(conversationId: UUID, messageId: UUID, newText: String) {
-        guard var conversation = conversations[conversationId] else { return }
-        guard let mIdx = conversation.firstIndex(where: { $0.id == messageId }) else { return }
-        let newMessageVersion = MessageVersion(text: newText, timestamp: Date())
-        if conversation[mIdx].branches.isEmpty {
-            let originalVersion = MessageVersion(
-                text: conversation[mIdx].text,
-                timestamp: conversation[mIdx].timestamp,
-                editedAt: conversation[mIdx].timestamp
-            )
-            conversation[mIdx].branches = [MessageBranch(parentMessageId: messageId, aiMessage: conversation[mIdx].currentBranch!.aiMessage, timestamp: conversation[mIdx].timestamp)]
-        }
-        conversation[mIdx].branches.append(MessageBranch(parentMessageId: messageId, aiMessage: Message(id: UUID(), text: newText, isCurrentUser: conversation[mIdx].isCurrentUser, timestamp: Date())))
-        conversation[mIdx].selectedBranchId = conversation[mIdx].branches.last!.id
-        removeSubsequentMessages(conversationId: conversationId, afterMessageIndex: mIdx)
-        editingMessageId = nil
-    }
-    func removeSubsequentMessages(conversationId: UUID, afterMessageIndex: Int) {
-        guard var conversation = conversations[conversationId] else { return }
-        let keepUpTo = afterMessageIndex + 1
-        if conversation.count > keepUpTo {
-            conversation.removeSubrange(keepUpTo...)
-        }
-        conversations.insert(conversation, forKey: conversationId)
-    }
-    func selectMessageBranch(conversationId: UUID, messageId: UUID, branchIdx: Int) {
-        guard var conversation = conversations[conversationId] else { return }
-        guard let mIdx = conversation.firstIndex(where: { $0.id == messageId }) else { return }
-        conversation[mIdx].selectedBranchId = conversation[mIdx].branches[branchIdx].id
-        conversations.insert(conversation, forKey: conversationId)
-    }
-    func addAIResponse(to conversationId: UUID, messageId: UUID, aiMessage: Message) {
-        guard var conversation = conversations[conversationId] else { return }
-        guard let mIdx = conversation.firstIndex(where: { $0.id == messageId }) else { return }
-        let newBranch = MessageBranch(parentMessageId: messageId, aiMessage: aiMessage, timestamp: Date())
-        conversation[mIdx].branches.append(newBranch)
-        conversation[mIdx].selectedBranchId = newBranch.id
+        
+        conversation.nodes[newNode.id] = newNode
+        conversation.currentNodeId = newNode.id
         conversations[conversationId] = conversation
-        let allMessages = conversation.flatMap { $0.allMessages }
-        if allMessages.count >= 2 && conversation.name.contains("New Chat") {
-            generateContextualTitle(for: conversationId)
-        }
+        
+        updateConversationName(conversationId)
     }
+    
+    func addAIResponse(to conversationId: UUID, nodeId: UUID, response: String) {
+        guard var conversation = conversations[conversationId] else { return }
+        
+        let aiResponse = AIResponse(text: response)
+        conversation.nodes[nodeId]?.aiResponses.append(aiResponse)
+        conversation.nodes[nodeId]?.selectedResponseId = aiResponse.id
+        
+        conversations[conversationId] = conversation
+    }
+    
+    func selectAIResponse(conversationId: UUID, nodeId: UUID, responseId: UUID) {
+        conversations[conversationId]?.nodes[nodeId]?.selectedResponseId = responseId
+    }
+    
+    func jumpToNode(conversationId: UUID, nodeId: UUID) {
+        conversations[conversationId]?.currentNodeId = nodeId
+    }
+    
+    func getConversationPath(for conversationId: UUID) -> [ConversationNode] {
+        guard let conversation = conversations[conversationId] else { return [] }
+        return conversation.getCurrentPath()
+    }
+    
+    func editMessage(conversationId: UUID, nodeId: UUID, newText: String) {
+        conversations[conversationId]?.nodes[nodeId]?.label = newText
+        editingNodeId = nil
+    }
+    
     func generateContextualTitle(for conversationId: UUID) {
         guard let conversation = conversations[conversationId] else { return }
         
-        // Only update name if we have enough messages for context
-        if conversation.count >= 2 {
-            let messages = conversation.prefix(2).map { $0.text }
-            let context = messages.joined(separator: " ")
-            
-            // Call AI to generate a contextual name
-            guard let url = URL(string: "http://127.0.0.1:1234/v1/chat/completions") else { return }
-            
-            let requestBody: [String: Any] = [
-                "model": aiSettings.model,
-                "messages": [
-                    [
-                        "role": "system",
-                        "content": "Generate a short, descriptive title (max 5 words) for a conversation based on these messages. The title should capture the main topic or purpose."
-                    ],
-                    [
-                        "role": "user",
-                        "content": context
-                    ]
+        let path = conversation.getCurrentPath()
+        guard path.count >= 2 else { return }
+        
+        let context = path.prefix(2).map { $0.label }.joined(separator: " ")
+        
+        // Call AI to generate a contextual name
+        guard let url = URL(string: "http://127.0.0.1:1234/v1/chat/completions") else { return }
+        
+        let requestBody: [String: Any] = [
+            "model": aiSettings.model,
+            "messages": [
+                [
+                    "role": "system",
+                    "content": "Generate a short, descriptive title (max 5 words) for a conversation based on these messages. The title should capture the main topic or purpose."
                 ],
-                "temperature": aiSettings.temperature,
-                "max_tokens": 20
-            ]
-            
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            
-            do {
-                request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-            } catch {
-                print("Failed to encode request: \(error)")
+                [
+                    "role": "user",
+                    "content": context
+                ]
+            ],
+            "temperature": aiSettings.temperature,
+            "max_tokens": 20
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        } catch {
+            print("Failed to encode request: \(error)")
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = json["choices"] as? [[String: Any]],
+                  let firstChoice = choices.first,
+                  let message = firstChoice["message"] as? [String: Any],
+                  let content = message["content"] as? String else {
                 return
             }
             
-            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let choices = json["choices"] as? [[String: Any]],
-                      let firstChoice = choices.first,
-                      let message = firstChoice["message"] as? [String: Any],
-                      let content = message["content"] as? String else {
-                    return
-                }
-                
-                DispatchQueue.main.async {
-                    self?.conversationNames[conversationId] = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }.resume()
-        }
+            DispatchQueue.main.async {
+                self?.conversations[conversationId]?.name = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }.resume()
     }
-    func selectBranch(conversationId: UUID, messageId: UUID, branchId: UUID) {
-        guard var conversation = conversations[conversationId] else { return }
-        guard let mIdx = conversation.firstIndex(where: { $0.id == messageId }) else { return }
-        conversation[mIdx].selectedBranchId = branchId
-        conversations.insert(conversation, forKey: conversationId)
+    
+    func saveSettings() {
+        // Implement settings persistence
     }
-    func saveSettings() {}
-    func loadSettings() {}
-    func resetSettingsToDefault() { aiSettings = .default }
+    
+    func loadSettings() {
+        // Implement settings loading
+    }
+    
+    func resetSettingsToDefault() { 
+        aiSettings = .default 
+    }
+    
     private func updateConversationName(_ conversationId: UUID) {
         guard let conversation = conversations[conversationId] else { return }
         
-        // Only update name if we have enough messages for context
-        if conversation.count >= 2 {
-            let messages = conversation.prefix(2).map { $0.text }
-            let context = messages.joined(separator: " ")
-            
-            // Call AI to generate a contextual name
-            guard let url = URL(string: "http://127.0.0.1:1234/v1/chat/completions") else { return }
-            
-            let requestBody: [String: Any] = [
-                "model": aiSettings.model,
-                "messages": [
-                    [
-                        "role": "system",
-                        "content": "Generate a short, descriptive title (max 5 words) for a conversation based on these messages. The title should capture the main topic or purpose."
-                    ],
-                    [
-                        "role": "user",
-                        "content": context
-                    ]
-                ],
-                "temperature": aiSettings.temperature,
-                "max_tokens": 20
-            ]
-            
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            
-            do {
-                request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-            } catch {
-                print("Failed to encode request: \(error)")
-                return
-            }
-            
-            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let choices = json["choices"] as? [[String: Any]],
-                      let firstChoice = choices.first,
-                      let message = firstChoice["message"] as? [String: Any],
-                      let content = message["content"] as? String else {
-                    return
-                }
-                
-                DispatchQueue.main.async {
-                    self?.conversationNames[conversationId] = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }.resume()
-        }
-    }
-    func addBranch(to conversationId: UUID, messageId: UUID, aiMessage: Message) {
-        DispatchQueue.main.async { [weak self] in
-            guard var conversation = self?.conversations[conversationId],
-                  let index = conversation.firstIndex(where: { $0.id == messageId }) else { return }
-            self?.isTyping = true
-            let newBranch = MessageBranch(parentMessageId: messageId, aiMessage: aiMessage)
-            conversation[index].branches.append(newBranch)
-            conversation[index].selectedBranchId = newBranch.id
-            // Create a new branch in the timeline
-            let newTree = MessageTree(text: aiMessage.text, isCurrentUser: false, timestamp: aiMessage.timestamp)
-            newTree.parentTreeId = messageId
-            conversation[index].childTreeIds.append(newTree.id)
-            self?.conversations[conversationId] = conversation
-            self?.isTyping = false
-        }
+        let path = conversation.getCurrentPath()
+        guard path.count >= 2 else { return }
+        
+        let context = path.prefix(2).map { $0.label }.joined(separator: " ")
+        generateContextualTitle(for: conversationId)
     }
 }
 
@@ -370,19 +305,20 @@ class ChatViewModel: ObservableObject {
 struct ContentView: View {
     @StateObject var viewModel = ChatViewModel()
     @State private var selectedConversationId: UUID? = nil
+    
     var body: some View {
         NavigationSplitView {
             SidebarView(viewModel: viewModel, selectedConversationId: $selectedConversationId)
-                .background(.ultraThinMaterial)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 0))
         } detail: {
             if let conversationId = selectedConversationId {
                 ChatPanelView(conversationId: conversationId, viewModel: viewModel)
-                    .background(.ultraThinMaterial)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 0))
             } else {
                 VStack(spacing: 20) {
-                    Image(systemName: "message")
+                    Image(systemName: "message.badge.circle")
                         .font(.system(size: 60))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.secondary.opacity(0.6))
                     Text("Select a conversation")
                         .font(.title2)
                         .fontWeight(.medium)
@@ -392,7 +328,7 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.ultraThinMaterial)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 0))
             }
         }
         .onAppear {
@@ -407,8 +343,11 @@ struct ContentView: View {
 struct SidebarView: View {
     @ObservedObject var viewModel: ChatViewModel
     @Binding var selectedConversationId: UUID?
+    @State private var showingAccountMenu = false
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header
             HStack {
                 Text("Chats")
                     .font(.title3)
@@ -422,25 +361,125 @@ struct SidebarView: View {
                         .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.blue)
                         .padding(6)
-                        .background(Color.blue.opacity(0.08))
+                        .background(Color.blue.opacity(0.15))
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            Divider().opacity(0.2)
+            
+            Divider().opacity(0.3)
+            
+            // Conversations List
             ScrollView {
                 VStack(spacing: 0) {
-                    ForEach(viewModel.conversations.map { $0.value }) { conversation in
-                        ConversationRowView(conversation: conversation, viewModel: viewModel, selectedConversationId: $selectedConversationId)
+                    ForEach(Array(viewModel.conversations.values)) { conversation in
+                        ConversationRowView(
+                            conversation: conversation, 
+                            viewModel: viewModel, 
+                            selectedConversationId: $selectedConversationId
+                        )
                     }
                 }
                 .padding(.vertical, 8)
             }
+            
+            Spacer()
+            
+            // Account Menu (placeholder)
+            VStack(spacing: 0) {
+                Divider().opacity(0.3)
+                
+                Button(action: { showingAccountMenu.toggle() }) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(.blue)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Account")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.primary)
+                            Text("Settings & Profile")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(Color.secondary.opacity(0.05))
+            }
         }
         .frame(minWidth: 260, maxWidth: 320)
-        .background(.ultraThinMaterial)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 0))
+        .popover(isPresented: $showingAccountMenu) {
+            AccountMenuView()
+                .frame(width: 250, height: 200)
+                .background(.ultraThinMaterial)
+        }
+    }
+}
+
+// --- Account Menu Placeholder ---
+struct AccountMenuView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Account")
+                .font(.title3)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+            
+            VStack(spacing: 12) {
+                AccountMenuItem(icon: "person.circle", title: "Profile", subtitle: "Coming soon")
+                AccountMenuItem(icon: "creditcard", title: "Billing", subtitle: "Coming soon")
+                AccountMenuItem(icon: "key", title: "API Keys", subtitle: "Coming soon")
+                AccountMenuItem(icon: "arrow.right.square", title: "Sign Out", subtitle: "Coming soon")
+            }
+            .padding(.horizontal, 16)
+            
+            Spacer()
+        }
+    }
+}
+
+struct AccountMenuItem: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundColor(.secondary)
+                .frame(width: 20)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Placeholder action
+        }
     }
 }
 
@@ -450,12 +489,14 @@ struct ConversationRowView: View {
     @State private var newName = ""
     @FocusState private var isFocused: Bool
     @Binding var selectedConversationId: UUID?
+    
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "sparkles")
+            Image(systemName: "message.circle")
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(.secondary)
                 .frame(width: 20)
+            
             HStack {
                 if viewModel.editingConversationNameId == conversation.id {
                     TextField("Conversation name", text: Binding(
@@ -489,11 +530,11 @@ struct ConversationRowView: View {
         .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(selectedConversationId == conversation.id ? .blue.opacity(0.2) : .clear)
+                .fill(selectedConversationId == conversation.id ? .blue.opacity(0.15) : .clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(.blue.opacity(0.4), lineWidth: selectedConversationId == conversation.id ? 1 : 0)
+                .stroke(.blue.opacity(0.3), lineWidth: selectedConversationId == conversation.id ? 1 : 0)
         )
         .onTapGesture {
             selectedConversationId = conversation.id
@@ -519,43 +560,54 @@ struct ChatPanelView: View {
     @State private var messageText = ""
     @State private var isLoading = false
     @State private var showingSettings = false
-    @State private var editingMessageId: UUID? = nil
+    @State private var editingNodeId: UUID? = nil
     @State private var editingText: String = ""
-    @State private var hoveredMessageId: UUID? = nil
+    @State private var hoveredNodeId: UUID? = nil
     @State private var showNodeTree = false
-    @State private var typingMessageId: UUID? = nil
-    @State private var typingVisibleText: String = ""
-    @State private var typingFullText: String = ""
-    @State private var typingTimer: Timer? = nil
     @State private var canSendMessage = true
+    
     var body: some View {
         ScrollViewReader { proxy in
             ZStack {
                 VStack(spacing: 0) {
+                    // Header
                     HStack {
-                        Text(viewModel.getConversationName(for: conversationId))
+                        Text(viewModel.conversations[conversationId]?.name ?? "Unknown")
                             .font(.title2)
                             .fontWeight(.semibold)
                         Spacer()
+                        
                         Button(action: { showingSettings = true }) {
-                            Image(systemName: "gearshape.fill")
+                            Image(systemName: "slider.horizontal.3")
                                 .font(.system(size: 16))
                                 .foregroundColor(.blue)
+                                .padding(8)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        Button(action: {}) {
-                            Image(systemName: "info.circle")
+                        
+                        Button(action: { showNodeTree.toggle() }) {
+                            Image(systemName: "rectangle.3.offgrid.bubble.left")
                                 .font(.system(size: 16))
+                                .foregroundColor(.secondary)
+                                .padding(8)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
                     }
                     .padding()
-                    .background(.ultraThinMaterial.opacity(0.3))
-                    Divider().opacity(0.2)
+                    .background(.ultraThinMaterial.opacity(0.5))
+                    
+                    Divider().opacity(0.3)
+                    
+                    // Messages
                     ScrollView {
                         LazyVStack(spacing: 16) {
-                            let messages = viewModel.getMessages(for: conversationId)
-                            if messages.isEmpty {
+                            let conversationPath = viewModel.getConversationPath(for: conversationId)
+                            
+                            if conversationPath.isEmpty {
                                 VStack(spacing: 20) {
                                     Image(systemName: "message.circle")
                                         .font(.system(size: 60))
@@ -572,188 +624,35 @@ struct ChatPanelView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.top, 100)
                             } else {
-                                ForEach(messages) { tree in
-                                    HStack(alignment: .top, spacing: 4) {
-                                        Spacer(minLength: 120)
-                                        VStack(alignment: .trailing, spacing: 4) {
-                                            if editingMessageId == tree.id {
-                                                TextField("Edit message", text: $editingText, onCommit: {
-                                                    let trimmed = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                                    if !trimmed.isEmpty {
-                                                        viewModel.editMessage(conversationId: conversationId, messageId: tree.id, newText: trimmed)
-                                                        getAIResponse(for: trimmed, editingMessageId: tree.id)
-                                                    }
-                                                    editingMessageId = nil
-                                                })
-                                                .textFieldStyle(.plain)
-                                                .padding(8)
-                                                .background(.ultraThinMaterial)
-                                                .cornerRadius(12)
-                                                .frame(maxWidth: 300)
-                                                .onAppear { editingText = tree.text }
-                                            } else {
-                                                VStack(alignment: .trailing, spacing: 4) {
-                                                    if !tree.branches.isEmpty {
-                                                        HStack(spacing: 4) {
-                                                            Button(action: {
-                                                                let newIdx = max(0, tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 }) ?? 0 } - 1)
-                                                                viewModel.selectBranch(conversationId: conversationId, messageId: tree.id, branchId: tree.branches[newIdx].id)
-                                                            }) {
-                                                                Image(systemName: "chevron.left")
-                                                                    .font(.system(size: 10))
-                                                                    .foregroundColor(.secondary)
-                                                            }
-                                                            .buttonStyle(.plain)
-                                                            .disabled(tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 }) == 0 } ?? true)
-                                                            Text("Edit \(tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! + 1 } ?? 1) of \(tree.branches.count)")
-                                                                .font(.caption2)
-                                                                .foregroundColor(.secondary)
-                                                            Button(action: {
-                                                                let newIdx = min(tree.branches.count - 1, tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! + 1 } ?? 0)
-                                                                viewModel.selectBranch(conversationId: conversationId, messageId: tree.id, branchId: tree.branches[newIdx].id)
-                                                            }) {
-                                                                Image(systemName: "chevron.right")
-                                                                    .font(.system(size: 10))
-                                                                    .foregroundColor(.secondary)
-                                                            }
-                                                            .buttonStyle(.plain)
-                                                            .disabled(tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 }) == tree.branches.count - 1 } ?? true)
-                                                        }
-                                                        .padding(.horizontal, 12)
-                                                        .padding(.vertical, 4)
-                                                        .background(.ultraThinMaterial.opacity(0.5))
-                                                        .cornerRadius(12)
-                                                    }
-                                                    Text(tree.text)
-                                                        .padding(.horizontal, 16)
-                                                        .padding(.vertical, 10)
-                                                        .background(.blue)
-                                                        .foregroundColor(.white)
-                                                        .cornerRadius(18)
-                                                        .textSelection(.enabled)
-                                                    HStack(spacing: 8) {
-                                                        if hoveredMessageId == tree.id {
-                                                            HStack(spacing: 6) {
-                                                                Button(action: {
-                                                                    NSPasteboard.general.setString(tree.text, forType: .string)
-                                                                }) {
-                                                                    Image(systemName: "doc.on.doc")
-                                                                        .font(.system(size: 12))
-                                                                        .foregroundColor(.secondary)
-                                                                        .padding(4)
-                                                                }
-                                                                .buttonStyle(.plain)
-                                                                .background(.ultraThinMaterial)
-                                                                .clipShape(Circle())
-                                                                Button(action: {
-                                                                    editingMessageId = tree.id
-                                                                    editingText = tree.text
-                                                                }) {
-                                                                    Image(systemName: "pencil")
-                                                                        .font(.system(size: 12))
-                                                                        .foregroundColor(.secondary)
-                                                                        .padding(4)
-                                                                }
-                                                                .buttonStyle(.plain)
-                                                                .background(.ultraThinMaterial)
-                                                                .clipShape(Circle())
-                                                            }
-                                                            .transition(.opacity)
-                                                        }
-                                                        Text(formatTime(tree.timestamp))
-                                                            .font(.caption2)
-                                                            .foregroundColor(.secondary)
-                                                    }
-                                                    .padding(.horizontal, 4)
-                                                }
-                                                .onHover { hovering in
-                                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                                        hoveredMessageId = hovering ? tree.id : nil
-                                                    }
-                                                }
+                                ForEach(conversationPath) { node in
+                                    NodeMessageView(
+                                        node: node,
+                                        conversationId: conversationId,
+                                        viewModel: viewModel,
+                                        editingNodeId: $editingNodeId,
+                                        editingText: $editingText,
+                                        hoveredNodeId: $hoveredNodeId,
+                                        onEditSubmit: { newText in
+                                            viewModel.editMessage(conversationId: conversationId, nodeId: node.id, newText: newText)
+                                            if !node.isCurrentUser {
+                                                // If editing AI message, get new response
+                                                getAIResponse(for: newText, parentNodeId: node.parentId)
                                             }
+                                        },
+                                        onGetResponse: { userMessage in
+                                            getAIResponse(for: userMessage, parentNodeId: node.id)
                                         }
-                                        .padding(.trailing, 16)
-                                    }
-                                    .id(tree.id)
-                                    if !tree.branches.isEmpty && tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! } < tree.branches.count {
-                                        let currentBranch = tree.branches[tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! }]
-                                        let isTyping = typingMessageId == currentBranch.aiMessage.id
-                                        HStack(alignment: .top, spacing: 4) {
-                                            HStack {
-                                                Text(isTyping ? typingVisibleText : currentBranch.aiMessage.text)
-                                                    .padding(.horizontal, 16)
-                                                    .padding(.vertical, 10)
-                                                    .background(.ultraThinMaterial)
-                                                    .foregroundColor(.primary)
-                                                    .cornerRadius(18)
-                                                    .textSelection(.enabled)
-                                            }
-                                            if tree.branches.count > 1 {
-                                                HStack(spacing: 8) {
-                                                    Text("Response \(tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! + 1 } ?? 1) of \(tree.branches.count)")
-                                                        .font(.caption2)
-                                                        .foregroundColor(.secondary)
-                                                    HStack(spacing: 4) {
-                                                        Button(action: {
-                                                            let newIndex = tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! > 0 ? tree.branches.firstIndex(where: { $0.id == $0 })! - 1 : tree.branches.count - 1 } ?? 0
-                                                            viewModel.selectBranch(conversationId: conversationId, messageId: tree.id, branchId: tree.branches[newIndex].id)
-                                                        }) {
-                                                            Image(systemName: "chevron.left")
-                                                                .font(.system(size: 10))
-                                                        }
-                                                        .buttonStyle(.plain)
-                                                        .background(.ultraThinMaterial)
-                                                        .clipShape(Circle())
-                                                        ForEach(tree.branches.indices, id: \.self) { idx in
-                                                            Button(action: {
-                                                                viewModel.selectBranch(conversationId: conversationId, messageId: tree.id, branchId: tree.branches[idx].id)
-                                                            }) {
-                                                                Circle()
-                                                                    .fill(idx == tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! } ? .blue : .secondary.opacity(0.3))
-                                                                    .frame(width: 8, height: 8)
-                                                            }
-                                                            .buttonStyle(.plain)
-                                                        }
-                                                        Button(action: {
-                                                            let newIndex = tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! < tree.branches.count - 1 ? tree.branches.firstIndex(where: { $0.id == $0 })! + 1 : 0 } ?? 0
-                                                            viewModel.selectBranch(conversationId: conversationId, messageId: tree.id, branchId: tree.branches[newIndex].id)
-                                                        }) {
-                                                            Image(systemName: "chevron.right")
-                                                                .font(.system(size: 10))
-                                                        }
-                                                        .buttonStyle(.plain)
-                                                        .background(.ultraThinMaterial)
-                                                        .clipShape(Circle())
-                                                    }
-                                                }
-                                                .padding(.horizontal, 16)
-                                                .padding(.vertical, 4)
-                                                .background(.ultraThinMaterial.opacity(0.5))
-                                                .cornerRadius(12)
-                                            }
-                                            Text(formatTime(currentBranch.aiMessage.timestamp))
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                                .padding(.horizontal, 4)
-                                        }
-                                        .padding(.leading, 16)
-                                        Spacer(minLength: 120)
-                                    }
+                                    )
+                                    .id(node.id)
                                 }
                             }
                         }
                         .padding(.vertical, 20)
-                        .onChange(of: viewModel.getMessages(for: conversationId).flatMap { $0.allMessages }.count) {
-                            let allMessages = viewModel.getMessages(for: conversationId).flatMap { $0.allMessages }
-                            if let lastMessage = allMessages.last {
-                                withAnimation(.easeOut(duration: 0.3)) {
-                                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                                }
-                            }
-                        }
                     }
-                    Divider().opacity(0.2)
+                    
+                    Divider().opacity(0.3)
+                    
+                    // Input Area
                     HStack(spacing: 12) {
                         TextField("Message", text: $messageText, axis: .vertical)
                             .textFieldStyle(.plain)
@@ -766,15 +665,7 @@ struct ChatPanelView: View {
                             .onSubmit {
                                 sendMessage()
                             }
-                        Button(action: { showNodeTree.toggle() }) {
-                            Image(systemName: "rectangle.3.offgrid.bubble.left")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundColor(.secondary)
-                                .padding(12)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Circle())
-                        }
-                        .buttonStyle(.plain)
+                        
                         Button(action: sendMessage) {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.system(size: 28))
@@ -785,20 +676,19 @@ struct ChatPanelView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 16)
-                    .background(.ultraThinMaterial)
+                    .background(.ultraThinMaterial.opacity(0.8))
                 }
+                
                 if showNodeTree {
-                    Color.black.opacity(0.3)
+                    Color.black.opacity(0.4)
                         .ignoresSafeArea()
                         .onTapGesture { showNodeTree = false }
+                    
                     NodeTreeOverlay(
-                        messages: viewModel.getMessages(for: conversationId),
-                        viewModel: viewModel,
                         conversationId: conversationId,
-                        onBranchSelect: { messageId, branchIdx in
-                            viewModel.selectBranch(conversationId: conversationId, messageId: messageId, branchId: viewModel.getMessages(for: conversationId)[branchIdx].branches[branchIdx].id)
-                        },
+                        viewModel: viewModel,
                         onNodeSelect: { nodeId in
+                            viewModel.jumpToNode(conversationId: conversationId, nodeId: nodeId)
                             withAnimation {
                                 proxy.scrollTo(nodeId, anchor: .center)
                             }
@@ -809,76 +699,71 @@ struct ChatPanelView: View {
                 }
             }
             .frame(minWidth: 600, minHeight: 400)
-            .background(.ultraThinMaterial)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 0))
             .sheet(isPresented: $showingSettings) {
                 AISettingsView(viewModel: viewModel)
-            }
-            .onChange(of: viewModel.getMessages(for: conversationId).last?.branches.last?.aiMessage.id) { newId in
-                guard let newId = newId,
-                      let aiMessage = viewModel.getMessages(for: conversationId).last?.branches.last?.aiMessage else { return }
-                typingMessageId = newId
-                typingFullText = aiMessage.text
-                typingVisibleText = aiMessage.text
-                typingTimer?.invalidate()
-                typingTimer = nil
-                canSendMessage = true
+                    .frame(minWidth: 600, minHeight: 500)
             }
         }
     }
-    private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
+    
     private func sendMessage() {
         guard canSendMessage else { return }
         let trimmedMessage = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedMessage.isEmpty else { return }
+        
         canSendMessage = false
-        let userMessage = Message(id: UUID(), text: trimmedMessage, isCurrentUser: true, timestamp: Date())
-        viewModel.addMessage(userMessage, to: conversationId)
+        viewModel.addMessage(trimmedMessage, to: conversationId, isUser: true)
         messageText = ""
-        if let lastTree = viewModel.getMessages(for: conversationId).last {
-            getAIResponse(for: trimmedMessage, editingMessageId: lastTree.id)
-        }
+        
+        // Get AI response
+        getAIResponse(for: trimmedMessage, parentNodeId: viewModel.conversations[conversationId]?.currentNodeId)
     }
-    private func getAIResponse(for userMessage: String, editingMessageId: UUID? = nil) {
+    
+    private func getAIResponse(for userMessage: String, parentNodeId: UUID?) {
         isLoading = true
-        print("🔄 Starting AI request for message: '\(userMessage)'")
+        viewModel.isTyping = true
+        
         guard let url = URL(string: "http://127.0.0.1:1234/v1/chat/completions") else {
-            print("❌ Invalid API URL")
-            addErrorMessage("Invalid API URL")
+            addErrorResponse("Invalid API URL", to: parentNodeId)
             return
         }
-        print("🌐 URL created successfully: \(url)")
-        let conversationHistory = viewModel.getMessages(for: conversationId)
+        
+        let conversationPath = viewModel.getConversationPath(for: conversationId)
         var messages: [[String: String]] = []
+        
+        // Add system prompt
         messages.append([
             "role": "system",
             "content": viewModel.aiSettings.systemPrompt
         ])
-        let recentMessages = conversationHistory.suffix(10)
-        for tree in recentMessages {
-            if tree.text.starts(with: "Error:") { continue }
+        
+        // Add conversation history
+        for node in conversationPath.suffix(10) {
             messages.append([
-                "role": tree.isCurrentUser ? "user" : "assistant",
-                "content": tree.text
+                "role": node.isCurrentUser ? "user" : "assistant",
+                "content": node.label
             ])
-            if !tree.branches.isEmpty && tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! } < tree.branches.count {
-                let aiBranch = tree.branches[tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! }]
+            
+            // Add AI responses if available
+            if !node.isCurrentUser, let selectedResponseId = node.selectedResponseId,
+               let response = node.aiResponses.first(where: { $0.id == selectedResponseId }) {
                 messages.append([
                     "role": "assistant",
-                    "content": aiBranch.aiMessage.text
+                    "content": response.text
                 ])
             }
         }
-        if messages.last?["content"] != userMessage {
+        
+        // Add current user message if not already in path
+        if !conversationPath.last?.label.contains(userMessage) ?? true {
             messages.append([
                 "role": "user",
                 "content": userMessage
             ])
         }
-        var requestBody: [String: Any] = [
+        
+        let requestBody: [String: Any] = [
             "model": viewModel.aiSettings.model,
             "messages": messages,
             "temperature": viewModel.aiSettings.temperature,
@@ -888,92 +773,235 @@ struct ChatPanelView: View {
             "frequency_penalty": viewModel.aiSettings.frequencyPenalty,
             "presence_penalty": viewModel.aiSettings.presencePenalty
         ]
-        if viewModel.aiSettings.topK > 0 {
-            requestBody["top_k"] = viewModel.aiSettings.topK
-        }
-        print("📝 Request body created with \(messages.count) messages")
-        print("🎛️ Settings: temp=\(viewModel.aiSettings.temperature), max_tokens=\(viewModel.aiSettings.maxTokens), top_p=\(viewModel.aiSettings.topP), top_k=\(viewModel.aiSettings.topK)")
+        
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-            print("✅ Request body serialized successfully")
         } catch {
-            print("❌ Failed to encode request: \(error)")
-            addErrorMessage("Failed to encode request")
+            addErrorResponse("Failed to encode request", to: parentNodeId)
             return
         }
-        print("🚀 Starting URLSession request...")
+        
         URLSession.shared.dataTask(with: request) { data, response, error in
-            isLoading = false
+            DispatchQueue.main.async {
+                isLoading = false
+                viewModel.isTyping = false
+                canSendMessage = true
+            }
+            
             guard let data = data, error == nil else {
-                print("❌ Network error: \(error?.localizedDescription ?? "Unknown error")")
-                addErrorMessage("Network error: \(error?.localizedDescription ?? "Unknown error")")
+                addErrorResponse("Network error: \(error?.localizedDescription ?? "Unknown error")", to: parentNodeId)
                 return
             }
+            
             do {
+                // Try OpenAI format first
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let choices = json["choices"] as? [[String: Any]],
                    let firstChoice = choices.first,
                    let message = firstChoice["message"] as? [String: Any],
                    let content = message["content"] as? String {
-                    print("✅ Successfully parsed OpenAI format response")
-                    let aiMessage = Message(id: UUID(), text: content.trimmingCharacters(in: .whitespacesAndNewlines), isCurrentUser: false, timestamp: Date())
-                    if let editId = editingMessageId {
-                        viewModel.addAIResponse(to: conversationId, messageId: editId, aiMessage: aiMessage)
+                    
+                    let cleanContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    DispatchQueue.main.async {
+                        if let nodeId = parentNodeId {
+                            viewModel.addAIResponse(to: conversationId, nodeId: nodeId, response: cleanContent)
+                        }
                     }
                     return
                 }
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let response = json["response"] as? String {
-                    print("✅ Successfully parsed direct response format")
-                    let aiMessage = Message(id: UUID(), text: response.trimmingCharacters(in: .whitespacesAndNewlines), isCurrentUser: false, timestamp: Date())
-                    if let editId = editingMessageId {
-                        viewModel.addAIResponse(to: conversationId, messageId: editId, aiMessage: aiMessage)
-                    }
-                    return
-                }
-                let completion = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["completion"] as? String
-                if let completion = completion {
-                    print("✅ Successfully parsed completion format")
-                    let aiMessage = Message(id: UUID(), text: completion.trimmingCharacters(in: .whitespacesAndNewlines), isCurrentUser: false, timestamp: Date())
-                    if let editId = editingMessageId {
-                        viewModel.addAIResponse(to: conversationId, messageId: editId, aiMessage: aiMessage)
-                    }
-                    return
-                }
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let text = json["text"] as? String {
-                    print("✅ Successfully parsed text format")
-                    let aiMessage = Message(id: UUID(), text: text.trimmingCharacters(in: .whitespacesAndNewlines), isCurrentUser: false, timestamp: Date())
-                    if let editId = editingMessageId {
-                        viewModel.addAIResponse(to: conversationId, messageId: editId, aiMessage: aiMessage)
-                    }
-                    return
-                }
-                print("❌ Could not parse any known response format")
-                addErrorMessage("Unexpected response format. Check console for raw response.")
+                
+                // Try other formats...
+                addErrorResponse("Unexpected response format", to: parentNodeId)
+                
             } catch {
-                print("❌ JSON parsing error: \(error.localizedDescription)")
-                addErrorMessage("Failed to parse response: \(error.localizedDescription)")
+                addErrorResponse("Failed to parse response: \(error.localizedDescription)", to: parentNodeId)
             }
         }.resume()
     }
-    private func addErrorMessage(_ error: String) {
-        let errorMessage = Message(id: UUID(), text: "Error: \(error)", isCurrentUser: false, timestamp: Date())
-        if let lastTree = viewModel.getMessages(for: conversationId).last {
-            viewModel.addAIResponse(to: conversationId, messageId: lastTree.id, aiMessage: errorMessage)
+    
+    private func addErrorResponse(_ error: String, to nodeId: UUID?) {
+        DispatchQueue.main.async {
+            isLoading = false
+            viewModel.isTyping = false
+            canSendMessage = true
+            
+            if let nodeId = nodeId {
+                viewModel.addAIResponse(to: conversationId, nodeId: nodeId, response: "Error: \(error)")
+            }
         }
+    }
+}
+
+// --- NodeMessageView ---
+struct NodeMessageView: View {
+    let node: ConversationNode
+    let conversationId: UUID
+    @ObservedObject var viewModel: ChatViewModel
+    @Binding var editingNodeId: UUID?
+    @Binding var editingText: String
+    @Binding var hoveredNodeId: UUID?
+    let onEditSubmit: (String) -> Void
+    let onGetResponse: (String) -> Void
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // User Message
+            HStack(alignment: .top, spacing: 4) {
+                if node.isCurrentUser {
+                    Spacer(minLength: 120)
+                }
+                
+                VStack(alignment: node.isCurrentUser ? .trailing : .leading, spacing: 4) {
+                    if editingNodeId == node.id {
+                        TextField("Edit message", text: $editingText, onCommit: {
+                            let trimmed = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                onEditSubmit(trimmed)
+                            }
+                            editingNodeId = nil
+                        })
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(12)
+                        .frame(maxWidth: 300)
+                        .onAppear { editingText = node.label }
+                    } else {
+                        HStack {
+                            if !node.isCurrentUser {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.blue)
+                            }
+                            
+                            Text(node.label)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(node.isCurrentUser ? .blue : .ultraThinMaterial)
+                                .foregroundColor(node.isCurrentUser ? .white : .primary)
+                                .cornerRadius(18)
+                                .textSelection(.enabled)
+                        }
+                        
+                        if hoveredNodeId == node.id {
+                            HStack(spacing: 8) {
+                                Button(action: {
+                                    NSPasteboard.general.setString(node.label, forType: .string)
+                                }) {
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                        .padding(4)
+                                }
+                                .buttonStyle(.plain)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                
+                                Button(action: {
+                                    editingNodeId = node.id
+                                    editingText = node.label
+                                }) {
+                                    Image(systemName: "pencil")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                        .padding(4)
+                                }
+                                .buttonStyle(.plain)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                            }
+                            .transition(.opacity)
+                        }
+                        
+                        Text(formatTime(node.timestamp))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        hoveredNodeId = hovering ? node.id : nil
+                    }
+                }
+                
+                if !node.isCurrentUser {
+                    Spacer(minLength: 120)
+                }
+            }
+            
+            // AI Responses
+            if !node.aiResponses.isEmpty {
+                HStack(alignment: .top, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let selectedResponseId = node.selectedResponseId,
+                           let selectedResponse = node.aiResponses.first(where: { $0.id == selectedResponseId }) {
+                            
+                            HStack {
+                                Image(systemName: "cpu")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.green)
+                                
+                                Text(selectedResponse.text)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(.ultraThinMaterial)
+                                    .foregroundColor(.primary)
+                                    .cornerRadius(18)
+                                    .textSelection(.enabled)
+                            }
+                            
+                            if node.aiResponses.count > 1 {
+                                HStack(spacing: 8) {
+                                    Text("Response \((node.aiResponses.firstIndex(where: { $0.id == selectedResponseId }) ?? 0) + 1) of \(node.aiResponses.count)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    
+                                    HStack(spacing: 4) {
+                                        ForEach(node.aiResponses.indices, id: \.self) { idx in
+                                            Button(action: {
+                                                viewModel.selectAIResponse(
+                                                    conversationId: conversationId,
+                                                    nodeId: node.id,
+                                                    responseId: node.aiResponses[idx].id
+                                                )
+                                            }) {
+                                                Circle()
+                                                    .fill(node.aiResponses[idx].id == selectedResponseId ? .blue : .secondary.opacity(0.3))
+                                                    .frame(width: 8, height: 8)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 4)
+                                .background(.ultraThinMaterial.opacity(0.5))
+                                .cornerRadius(12)
+                            }
+                        }
+                    }
+                    
+                    Spacer(minLength: 120)
+                }
+            }
+        }
+    }
+    
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }
 
 // --- NodeTreeOverlay ---
 struct NodeTreeOverlay: View {
-    let messages: [MessageTree]
-    let viewModel: ChatViewModel
     let conversationId: UUID
-    let onBranchSelect: (UUID, Int) -> Void
+    let viewModel: ChatViewModel
     let onNodeSelect: (UUID) -> Void
     let onClose: () -> Void
     var body: some View {
@@ -1003,14 +1031,9 @@ struct NodeTreeOverlay: View {
                 Divider().opacity(0.15)
                 ScrollView([.horizontal, .vertical]) {
                     FlowchartTreeView(
-                        messages: messages,
+                        messages: viewModel.getConversationPath(for: conversationId),
                         viewModel: viewModel,
                         conversationId: conversationId,
-                        onBranchSelect: onBranchSelect,
-                        onMessageBranchSelect: { messageId, branchIdx in
-                            viewModel.selectBranch(conversationId: conversationId, messageId: messageId, branchId: messages[branchIdx].branches[branchIdx].id)
-                            onNodeSelect(messageId)
-                        },
                         onNodeSelect: onNodeSelect
                     )
                     .padding(60)
@@ -1036,23 +1059,20 @@ struct NodeTreeOverlay: View {
 
 // --- FlowchartTreeView ---
 struct FlowchartTreeView: View {
-    let messages: [MessageTree]
+    let messages: [ConversationNode]
     let viewModel: ChatViewModel
     let conversationId: UUID
-    let onBranchSelect: (UUID, Int) -> Void
-    let onMessageBranchSelect: (UUID, Int) -> Void
     let onNodeSelect: (UUID) -> Void
+    
     var body: some View {
         VStack(spacing: 60) {
-            ForEach(Array(messages.enumerated()), id: \.element.id) { messageIndex, tree in
-                FlowchartNode(
-                    tree: tree,
+            ForEach(Array(messages.enumerated()), id: \.element.id) { messageIndex, node in
+                FlowchartNodeView(
+                    node: node,
                     messageIndex: messageIndex,
                     isLast: messageIndex == messages.count - 1,
                     viewModel: viewModel,
                     conversationId: conversationId,
-                    onBranchSelect: onBranchSelect,
-                    onMessageBranchSelect: onMessageBranchSelect,
                     onNodeSelect: onNodeSelect
                 )
             }
@@ -1060,49 +1080,52 @@ struct FlowchartTreeView: View {
     }
 }
 
-// --- FlowchartNode ---
-struct FlowchartNode: View {
-    let tree: MessageTree
+// --- FlowchartNodeView ---
+struct FlowchartNodeView: View {
+    let node: ConversationNode
     let messageIndex: Int
     let isLast: Bool
     let viewModel: ChatViewModel
     let conversationId: UUID
-    let onBranchSelect: (UUID, Int) -> Void
-    let onMessageBranchSelect: (UUID, Int) -> Void
     let onNodeSelect: (UUID) -> Void
-    private var currentMessage: String {
-        if tree.branches.isEmpty {
-            return tree.text
-        } else {
-            return tree.branches[tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! }]
-        }
-    }
+    
     var body: some View {
         VStack(spacing: 40) {
             VStack(spacing: 20) {
-                if tree.branches.count > 1 {
+                // Main Node
+                FlowchartMessageBox(
+                    text: node.label,
+                    title: node.routeLabel ?? "Node \(messageIndex + 1)",
+                    isSelected: viewModel.conversations[conversationId]?.currentNodeId == node.id,
+                    isUser: node.isCurrentUser,
+                    onTap: {
+                        onNodeSelect(node.id)
+                    }
+                )
+                
+                // AI Responses
+                if !node.aiResponses.isEmpty {
                     HStack(spacing: 30) {
-                        ForEach(Array(tree.branches.enumerated()), id: \.element.id) { branchIdx, branch in
+                        ForEach(Array(node.aiResponses.enumerated()), id: \.element.id) { responseIdx, response in
                             FlowchartMessageBox(
-                                text: branch.aiMessage.text,
-                                title: branchIdx == 0 ? "Original" : "Edit \(branchIdx)",
-                                isSelected: tree.selectedBranchId.map { tree.branches.firstIndex(where: { $0.id == $0 })! } == branchIdx,
-                                isUser: true,
+                                text: response.text,
+                                title: "Response \(responseIdx + 1)",
+                                isSelected: node.selectedResponseId == response.id,
+                                isUser: false,
                                 onTap: {
-                                    onMessageBranchSelect(tree.id, branchIdx)
+                                    viewModel.selectAIResponse(
+                                        conversationId: conversationId,
+                                        nodeId: node.id,
+                                        responseId: response.id
+                                    )
+                                    onNodeSelect(node.id)
                                 }
                             )
                         }
                     }
-                } else {
-                    FlowchartMessageBox(
-                        text: currentMessage,
-                        title: "Question \(messageIndex + 1)",
-                        isSelected: true,
-                        isUser: true,
-                        onTap: {}
-                    )
                 }
+                
+                // Connection line to next node
                 if !isLast {
                     Rectangle()
                         .fill(Color.secondary.opacity(0.4))
@@ -1120,9 +1143,11 @@ struct FlowchartMessageBox: View {
     let isSelected: Bool
     let isUser: Bool
     let onTap: () -> Void
+    
     private var displayText: String {
         text.count > 120 ? String(text.prefix(120)) + "..." : text
     }
+    
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 8) {
@@ -1139,7 +1164,7 @@ struct FlowchartMessageBox: View {
                 .frame(width: 200, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(isUser ? Color.blue.opacity(0.1) : Color.green.opacity(0.1))
+                        .fill(isUser ? Color.blue.opacity(0.15) : Color.green.opacity(0.15))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
@@ -1150,6 +1175,7 @@ struct FlowchartMessageBox: View {
                             lineWidth: isSelected ? 2 : 1
                         )
                 )
+                
                 Text(title)
                     .font(.caption)
                     .fontWeight(.medium)
@@ -1166,120 +1192,278 @@ struct FlowchartMessageBox: View {
     }
 }
 
-// --- AISettingsView ---
+// --- Enhanced AISettingsView ---
 struct AISettingsView: View {
     @ObservedObject var viewModel: ChatViewModel
     @Environment(\.dismiss) private var dismiss
+    
     var body: some View {
         NavigationView {
             Form {
-                Section("System Prompt") {
-                    TextEditor(text: $viewModel.aiSettings.systemPrompt)
-                        .frame(minHeight: 100)
-                        .onChange(of: viewModel.aiSettings.systemPrompt) {
-                            viewModel.saveSettings()
-                        }
+                Section("System Configuration") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("System Prompt")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        TextEditor(text: $viewModel.aiSettings.systemPrompt)
+                            .font(.system(size: 14, family: .monospaced))
+                            .frame(minHeight: 120)
+                            .padding(8)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(8)
+                            .onChange(of: viewModel.aiSettings.systemPrompt) { _ in
+                                viewModel.saveSettings()
+                            }
+                        
+                        Text("This prompt defines the AI's personality and behavior")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
+                
                 Section("Model Settings") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Temperature:")
-                            Spacer()
-                            Text("\(viewModel.aiSettings.temperature, specifier: "%.2f")")
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Temperature
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Temperature")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text("\(viewModel.aiSettings.temperature, specifier: "%.2f")")
+                                    .font(.subheadline)
+                                    .foregroundColor(.blue)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(.blue.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
+                            Slider(value: $viewModel.aiSettings.temperature, in: 0.0...2.0, step: 0.1)
+                                .accentColor(.blue)
+                                .onChange(of: viewModel.aiSettings.temperature) { _ in
+                                    viewModel.saveSettings()
+                                }
+                            
+                            Text("Controls randomness. Higher = more creative, lower = more focused")
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        Slider(value: $viewModel.aiSettings.temperature, in: 0.0...2.0, step: 0.1)
-                            .onChange(of: viewModel.aiSettings.temperature) {
-                                viewModel.saveSettings()
+                        
+                        Divider().opacity(0.5)
+                        
+                        // Max Tokens
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Max Tokens")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text("\(viewModel.aiSettings.maxTokens)")
+                                    .font(.subheadline)
+                                    .foregroundColor(.green)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(.green.opacity(0.1))
+                                    .cornerRadius(4)
                             }
-                        Text("Controls randomness. Higher = more creative, lower = more focused")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            
+                            Slider(value: Binding(
+                                get: { Double(viewModel.aiSettings.maxTokens) },
+                                set: { viewModel.aiSettings.maxTokens = Int($0) }
+                            ), in: 100...8000, step: 100)
+                                .accentColor(.green)
+                                .onChange(of: viewModel.aiSettings.maxTokens) { _ in
+                                    viewModel.saveSettings()
+                                }
+                            
+                            Text("Maximum length of AI responses")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider().opacity(0.5)
+                        
+                        // Top P
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Top P")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text("\(viewModel.aiSettings.topP, specifier: "%.2f")")
+                                    .font(.subheadline)
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(.orange.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
+                            Slider(value: $viewModel.aiSettings.topP, in: 0.1...1.0, step: 0.05)
+                                .accentColor(.orange)
+                                .onChange(of: viewModel.aiSettings.topP) { _ in
+                                    viewModel.saveSettings()
+                                }
+                            
+                            Text("Alternative to temperature. Controls diversity of word choices")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider().opacity(0.5)
+                        
+                        // Top K
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Top K")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text("\(viewModel.aiSettings.topK)")
+                                    .font(.subheadline)
+                                    .foregroundColor(.purple)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(.purple.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
+                            Slider(value: Binding(
+                                get: { Double(viewModel.aiSettings.topK) },
+                                set: { viewModel.aiSettings.topK = Int($0) }
+                            ), in: 1...100, step: 1)
+                                .accentColor(.purple)
+                                .onChange(of: viewModel.aiSettings.topK) { _ in
+                                    viewModel.saveSettings()
+                                }
+                            
+                            Text("Limits vocabulary choices to top K most likely words")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Max Tokens:")
-                            Spacer()
-                            Text("\(viewModel.aiSettings.maxTokens)")
+                }
+                
+                Section("Penalties") {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Frequency Penalty
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Frequency Penalty")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text("\(viewModel.aiSettings.frequencyPenalty, specifier: "%.2f")")
+                                    .font(.subheadline)
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(.red.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
+                            Slider(value: $viewModel.aiSettings.frequencyPenalty, in: -2.0...2.0, step: 0.1)
+                                .accentColor(.red)
+                                .onChange(of: viewModel.aiSettings.frequencyPenalty) { _ in
+                                    viewModel.saveSettings()
+                                }
+                            
+                            Text("Reduces repetition of frequently used words")
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        Slider(value: Binding(
-                            get: { Double(viewModel.aiSettings.maxTokens) },
-                            set: { viewModel.aiSettings.maxTokens = Int($0) }
-                        ), in: 100...4000, step: 100)
-                            .onChange(of: viewModel.aiSettings.maxTokens) {
-                                viewModel.saveSettings()
+                        
+                        // Presence Penalty
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Presence Penalty")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text("\(viewModel.aiSettings.presencePenalty, specifier: "%.2f")")
+                                    .font(.subheadline)
+                                    .foregroundColor(.pink)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(.pink.opacity(0.1))
+                                    .cornerRadius(4)
                             }
-                        Text("Maximum length of AI responses")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            
+                            Slider(value: $viewModel.aiSettings.presencePenalty, in: -2.0...2.0, step: 0.1)
+                                .accentColor(.pink)
+                                .onChange(of: viewModel.aiSettings.presencePenalty) { _ in
+                                    viewModel.saveSettings()
+                                }
+                            
+                            Text("Encourages discussing new topics")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Top P:")
-                            Spacer()
-                            Text("\(viewModel.aiSettings.topP, specifier: "%.2f")")
-                                .foregroundColor(.secondary)
-                        }
-                        Slider(value: $viewModel.aiSettings.topP, in: 0.1...1.0, step: 0.05)
-                            .onChange(of: viewModel.aiSettings.topP) {
+                }
+                
+                Section("Model Configuration") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Model Name")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        
+                        TextField("Enter model name...", text: $viewModel.aiSettings.model)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 14, family: .monospaced))
+                            .onChange(of: viewModel.aiSettings.model) { _ in
                                 viewModel.saveSettings()
                             }
-                        Text("Alternative to temperature. Controls diversity of word choices")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Top K:")
-                            Spacer()
-                            Text("\(viewModel.aiSettings.topK)")
-                                .foregroundColor(.secondary)
-                        }
-                        Slider(value: Binding(
-                            get: { Double(viewModel.aiSettings.topK) },
-                            set: { viewModel.aiSettings.topK = Int($0) }
-                        ), in: 1...100, step: 1)
-                            .onChange(of: viewModel.aiSettings.topK) {
-                                viewModel.saveSettings()
-                            }
-                        Text("Limits vocabulary choices to top K most likely words")
+                        
+                        Text("The AI model identifier for your local server")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
-                Section("Model") {
-                    TextField("Model Name", text: $viewModel.aiSettings.model)
-                        .onChange(of: viewModel.aiSettings.model) {
-                            viewModel.saveSettings()
-                        }
-                }
+                
                 Section {
-                    Button("Reset to Defaults") {
-                        viewModel.resetSettingsToDefault()
+                    HStack {
+                        Button("Reset to Defaults") {
+                            viewModel.resetSettingsToDefault()
+                        }
+                        .foregroundColor(.red)
+                        .padding(.vertical, 8)
+                        
+                        Spacer()
+                        
+                        Button("Export Settings") {
+                            // Placeholder for export functionality
+                        }
+                        .foregroundColor(.blue)
+                        .padding(.vertical, 8)
                     }
-                    .foregroundColor(.red)
                 }
             }
-            .navigationTitle("AI Settings")
+            .formStyle(.grouped)
+            .navigationTitle("AI Configuration")
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
-                Button("Done") {
-                    dismiss()
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
         }
-        .frame(minWidth: 500, minHeight: 600)
+        .background(.ultraThinMaterial)
     }
 }
 
-// TypingIndicatorView for animated dots
+// Helper views for better UI
 struct TypingIndicatorView: View {
     @State private var phase: Int = 0
     @State private var timer: Timer?
     let dotCount = 3
     let dotSize: CGFloat = 8
     let dotSpacing: CGFloat = 6
-    let animation = Animation.easeInOut(duration: 0.5).repeatForever(autoreverses: true)
     
     var body: some View {
         HStack(spacing: dotSpacing) {
@@ -1288,77 +1472,17 @@ struct TypingIndicatorView: View {
                     .fill(Color.gray)
                     .frame(width: dotSize, height: dotSize)
                     .opacity(phase == i ? 1 : 0.4)
+                    .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: phase)
             }
         }
         .onAppear {
-            withAnimation(animation) {
-                timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
-                    phase = (phase + 1) % dotCount
-                }
+            timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+                phase = (phase + 1) % dotCount
             }
         }
         .onDisappear {
             timer?.invalidate()
             timer = nil
-        }
-    }
-}
-
-// MessageBubbleView for rendering messages
-struct MessageBubbleView: View {
-    let message: Message
-    let isUser: Bool
-    
-    var body: some View {
-        HStack {
-            if isUser { Spacer() }
-            Text(message.text)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(isUser ? Color.blue : Color(NSColor.windowBackgroundColor).opacity(0.8))
-                .foregroundColor(isUser ? .white : .primary)
-                .cornerRadius(18)
-                .textSelection(.enabled)
-                .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
-            if !isUser { Spacer() }
-        }
-        .padding(.horizontal, 8)
-    }
-}
-
-struct MessageTreeView: View {
-    let messageTree: MessageTree
-    let viewModel: ChatViewModel
-    let conversationId: UUID
-    let onBranchSelect: (UUID, Int) -> Void
-    let onNodeSelect: (UUID) -> Void
-    @State private var showTypingIndicator = false
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(messageTree.allMessages) { message in
-                MessageBubbleView(message: message, isUser: message.isCurrentUser)
-            }
-            
-            if showTypingIndicator {
-                HStack {
-                    TypingIndicatorView()
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color(NSColor.windowBackgroundColor).opacity(0.8))
-                        .cornerRadius(18)
-                    Spacer()
-                }
-                .padding(.horizontal, 8)
-            }
-        }
-        .onChange(of: messageTree.branches.count) { newCount in
-            if newCount > 0 {
-                showTypingIndicator = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    showTypingIndicator = false
-                }
-            }
         }
     }
 } 
